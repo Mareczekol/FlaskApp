@@ -1,0 +1,6 @@
+# created by virtualenv automatically
+venv/
+inventory.txt
+account.txt
+actions.txt
+.idea/
