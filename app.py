@@ -1,10 +1,43 @@
 from flask import Flask, render_template, request, redirect, url_for
-import os
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+# app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+
+# app.debug = True #for error checking
 
 
-@app.route('/')
+class Account(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    balance = db.Column(db.Float, default=0.0)
+
+
+class Inventory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    product_name = db.Column(db.String(100), unique=True)
+    price = db.Column(db.Float)
+    quantity = db.Column(db.Integer)
+
+
+class Action(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    action_type = db.Column(db.String(20))
+    product_name = db.Column(db.String(100))
+    price = db.Column(db.Float)
+    quantity = db.Column(db.Integer)
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    # Log the error or display a user-friendly error page
+    return "Internal Server Error", 500
+
+
+@app.route('/', endpoint='home')
 def home():
     account = load_account()
     inventory = load_inventory()
@@ -17,20 +50,22 @@ def purchase():
     price = float(request.form['price'])
     quantity = int(request.form['quantity'])
 
-    inventory = load_inventory()
-    if product_name in inventory:
-        inventory[product_name][1] += quantity
+    inventory = Inventory.query.filter_by(product_name=product_name).first()
+    if inventory:
+        inventory.quantity += quantity
     else:
-        inventory[product_name] = [price, quantity]
+        inventory = Inventory(product_name=product_name, price=price,
+                              quantity=quantity)
+        db.session.add(inventory)
 
-    account = load_account()
-    account -= price * quantity
+    account = Account.query.first()
+    account.balance -= price * quantity
 
-    action = ("purchase", product_name, price, quantity)
-    save_action(action)
+    action = Action(action_type="purchase", product_name=product_name,
+                    price=price, quantity=quantity)
+    db.session.add(action)
 
-    save_account(account)
-    save_inventory(inventory)
+    db.session.commit()
 
     return redirect(url_for('home'))
 
@@ -63,7 +98,8 @@ def change_balance():
     account = load_account()
     account += amount
 
-    action = ("change_balance", amount)
+    action = ("change_balance", "", amount, 0)
+    # Add empty strings for product_name and quantity
     save_action(action)
 
     save_account(account)
@@ -91,49 +127,94 @@ def history():
 
 
 def load_account():
-    if not os.path.exists('account.txt'):
-        with open('account.txt', 'w') as account_file:
-            account_file.write('0')
-    else:
-        with open('account.txt', 'r') as account_file:
-            return float(account_file.read().strip())
+    account = Account.query.first()
+    if not account:
+        account = Account(balance=0.0)
+        db.session.add(account)
+        db.session.commit()
+    return account.balance
 
 
 def save_account(account):
-    with open('account.txt', 'w') as account_file:
-        account_file.write(str(account))
+    account_obj = Account.query.first()
+    if not account_obj:
+        account_obj = Account(balance=account)
+        db.session.add(account_obj)
+    else:
+        account_obj.balance = account
+    db.session.commit()
 
 
 def load_inventory():
     inventory = {}
-    if os.path.exists('inventory.txt'):
-        with open('inventory.txt', 'r') as inventory_file:
-            for line in inventory_file:
-                product, price, quantity = line.strip().split(',')
-                inventory[product] = [float(price), int(quantity)]
+    inventory_objs = Inventory.query.all()
+    for item in inventory_objs:
+        inventory[item.product_name] = [item.price, item.quantity]
     return inventory
 
 
 def save_inventory(inventory):
-    with open('inventory.txt', 'w') as inventory_file:
-        for product, details in inventory.items():
-            inventory_file.write(f"{product},{details[0]},{details[1]}\n")
+    for product, details in inventory.items():
+        inventory_obj = Inventory.query.filter_by(product_name=product).first()
+        if inventory_obj:
+            inventory_obj.price = details[0]
+            inventory_obj.quantity = details[1]
+        else:
+            inventory_obj = Inventory(product_name=product, price=details[0],
+                                      quantity=details[1])
+            db.session.add(inventory_obj)
+    db.session.commit()
 
 
 def load_actions():
     actions = []
-    if os.path.exists('actions.txt'):
-        with open('actions.txt', 'r') as actions_file:
-            for line in actions_file:
-                action = eval(line.strip())
-                actions.append(action)
+    action_objs = Action.query.all()
+    for action in action_objs:
+        actions.append((action.action_type, action.product_name, action.price,
+                        action.quantity))
     return actions
 
 
 def save_action(action):
-    with open('actions.txt', 'a') as actions_file:
-        actions_file.write(str(action) + '\n')
+    action_obj = Action(action_type=action[0], product_name=action[1],
+                        price=action[2], quantity=action[3])
+    db.session.add(action_obj)
+    db.session.commit()
+
+
+def check_data_integrity():
+    account = Account.query.first()
+    inventory = Inventory.query.all()
+    actions = Action.query.all()
+
+    file_account = load_account()
+    file_inventory = load_inventory()
+    file_actions = load_actions()
+
+    if account.balance != file_account:
+        print("Error: Account balance mismatch")
+
+    for item in inventory:
+        if item.product_name not in file_inventory or item.price != \
+                file_inventory[item.product_name][0] or item.quantity \
+                != file_inventory[item.product_name][1]:
+            print(f"Error: Inventory mismatch for product {item.product_name}")
+
+    if len(actions) != len(file_actions):
+        print("Error: Actions count mismatch")
+    else:
+        for action, file_action in zip(actions, file_actions):
+            if action.action_type != file_action[0] or action.product_name != \
+                    file_action[1] or action.price != file_action[2] or \
+                    action.quantity != file_action[3]:
+                print(f"Error: Action mismatch for action {action.id}")
+
+
+def create_tables():
+    with app.app_context():
+        db.create_all()
 
 
 if __name__ == '__main__':
+    create_tables()
     app.run()
