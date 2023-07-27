@@ -14,8 +14,16 @@ def home():
 @app.route('/purchase', methods=['POST'])
 def purchase():
     product_name = request.form['product_name']
-    price = float(request.form['price'])
-    quantity = int(request.form['quantity'])
+    price = request.form['price']
+    quantity = request.form['quantity']
+
+    if not product_name or not price or not quantity:
+        error_message = "Please fill in all the fields."
+        inventory = load_inventory()
+        return render_template('home.html', error_message=error_message, inventory=inventory)
+
+    price = float(price)
+    quantity = int(quantity)
 
     inventory = load_inventory()
     if product_name in inventory:
@@ -38,7 +46,14 @@ def purchase():
 @app.route('/sale', methods=['POST'])
 def sale():
     product_name = request.form['product_name']
-    quantity = int(request.form['quantity'])
+    quantity = request.form['quantity']
+
+    if not product_name or not quantity:
+        error_message = "Please fill in all the fields."
+        inventory = load_inventory()
+        return render_template('home.html', error_message=error_message, inventory=inventory)
+
+    quantity = int(quantity)
 
     inventory = load_inventory()
     if product_name in inventory and inventory[product_name][1] >= quantity:
@@ -58,7 +73,26 @@ def sale():
 
 @app.route('/change_balance', methods=['POST'])
 def change_balance():
-    amount = float(request.form['amount'])
+    amount = request.form['amount']
+
+    if not amount:
+        error_message = "Please enter an amount."
+        account = load_account()
+        inventory = load_inventory()
+        return render_template('home.html', error_message=error_message, account=account, inventory=inventory)
+
+    try:
+        amount = float(amount)
+        if amount < 0:
+            error_message = "Please enter a positive amount."
+            account = load_account()
+            inventory = load_inventory()
+            return render_template('home.html', error_message=error_message, account=account, inventory=inventory)
+    except ValueError:
+        error_message = "Invalid amount. Please enter a valid number."
+        account = load_account()
+        inventory = load_inventory()
+        return render_template('home.html', error_message=error_message, account=account, inventory=inventory)
 
     account = load_account()
     account += amount
@@ -86,8 +120,7 @@ def history():
             start = None
             end = None
 
-    return render_template('history.html', actions=actions, start=start,
-                           end=end)
+    return render_template('history.html', actions=actions, start=start, end=end)
 
 
 def load_account():
